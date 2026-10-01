@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS scheme_applicability CASCADE;
+DROP TABLE IF EXISTS schemes CASCADE;
+DROP TABLE IF EXISTS product_prices CASCADE;

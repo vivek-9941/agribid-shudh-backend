@@ -1,0 +1,1 @@
+-- Placeholder: full schema created in IT-1 migrations

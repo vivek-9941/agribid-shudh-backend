@@ -1,0 +1,40 @@
+# Binaries
+agribid-shudh-backend
+*.exe
+*.out
+*.test
+*.prof
+
+# Go build cache
+/vendor/
+
+# Environment and secrets
+.env
+.env.*
+configs/*.yaml
+!configs/config.example.yaml
+
+# RSA keys
+*.pem
+*.key
+*.crt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Migration binaries (if built locally)
+migrate
+
+# Docker overrides
+docker-compose.override.yml
