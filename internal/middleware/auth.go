@@ -57,23 +57,20 @@ func Auth(jwtService *auth.JWTService) func(http.Handler) http.Handler {
 			}
 
 			uc := &auth.UserContext{
+				ID:        userID,
 				UserID:    userID,
 				PartnerID: partnerID,
 				Roles:     claims.Roles,
 				IsAdmin:   isAdmin,
 			}
 
-			ctx := context.WithValue(r.Context(), ctxKeyUserContext{}, uc)
+			ctx := auth.WithUserContext(r.Context(), uc)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// GetUserContext extracts the UserContext from context.
-// Returns nil if not present (e.g., unauthenticated request).
+// GetUserContext delegates to auth.GetUserContext for backwards compatibility.
 func GetUserContext(ctx context.Context) *auth.UserContext {
-	if uc, ok := ctx.Value(ctxKeyUserContext{}).(*auth.UserContext); ok {
-		return uc
-	}
-	return nil
+	return auth.GetUserContext(ctx)
 }

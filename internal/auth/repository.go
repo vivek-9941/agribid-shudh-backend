@@ -39,14 +39,6 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 	return &pgRepo{pool: pool}
 }
 
-// conn returns the transaction from context or falls back to the pool.
-func (r *pgRepo) conn(ctx context.Context) interface {
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	Exec(ctx context.Context, sql string, args ...interface{}) (interface{ RowsAffected() int64 }, error)
-} {
-	// When inside a WithTx call, the tx is in context. For now, use pool directly.
-	return r.pool
-}
 
 func (r *pgRepo) CreateUser(ctx context.Context, user *User) error {
 	query := `INSERT INTO users (id, phone, email, password_hash, full_name, status, partner_id, created_at, updated_at)

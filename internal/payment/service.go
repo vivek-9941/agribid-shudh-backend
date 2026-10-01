@@ -9,15 +9,19 @@ import (
 	"github.com/agribid/agribid-shudh-backend/internal/db"
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Service struct {
 	repo Repository
+	pool *pgxpool.Pool
 }
 
-func NewService(repo Repository) *Service {
+func NewService(repo Repository, pool *pgxpool.Pool) *Service {
 	return &Service{
 		repo: repo,
+		pool: pool,
 	}
 }
 
@@ -28,7 +32,7 @@ func (s *Service) CheckCreditLimit(ctx context.Context, buyerID, sellerID uuid.U
 	}
 	if account == nil {
 		// Assume zero credit limit if no account exists
-		return apperrors.BadRequest("no credit account established")
+		return apperrors.BadRequest(apperrors.CodeCreditLimitExceeded, "no credit account established")
 	}
 
 	limitRat, _ := new(big.Rat).SetString(account.CreditLimit)
@@ -38,7 +42,7 @@ func (s *Service) CheckCreditLimit(ctx context.Context, buyerID, sellerID uuid.U
 	availableRat := new(big.Rat).Sub(limitRat, utilizedRat)
 
 	if requestedRat.Cmp(availableRat) > 0 {
-		return apperrors.BadRequest(fmt.Sprintf("credit limit exceeded. available: %s, requested: %s", formatDecimal(availableRat), amountStr))
+		return apperrors.BadRequest(apperrors.CodeCreditLimitExceeded, fmt.Sprintf("credit limit exceeded. available: %s, requested: %s", formatDecimal(availableRat), amountStr))
 	}
 
 	return nil
@@ -65,15 +69,15 @@ func (s *Service) RecordPayment(ctx context.Context, req *RecordPaymentRequest, 
 		pay.InvoiceID = &iid
 	}
 
-	err := db.WithTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.RecordPayment(txCtx, pay); err != nil {
+	err := db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := s.repo.RecordPayment(ctx, pay); err != nil {
 			return err
 		}
 
 		// Reduce credit utilized
 		amtRat, _ := new(big.Rat).SetString(req.Amount)
 		negAmt := new(big.Rat).Neg(amtRat)
-		if err := s.repo.UpdateCredit(txCtx, buyerID, sellerID, formatDecimal(negAmt)); err != nil {
+		if err := s.repo.UpdateCredit(ctx, buyerID, sellerID, formatDecimal(negAmt)); err != nil {
 			return err
 		}
 
@@ -89,7 +93,7 @@ func (s *Service) RecordPayment(ctx context.Context, req *RecordPaymentRequest, 
 			EntryDate:      time.Now(),
 			Description:    fmt.Sprintf("Payment via %s", req.Method),
 		}
-		if err := s.repo.InsertLedgerEntry(txCtx, entry); err != nil {
+		if err := s.repo.InsertLedgerEntry(ctx, entry); err != nil {
 			return err
 		}
 

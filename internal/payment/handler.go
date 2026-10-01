@@ -98,7 +98,7 @@ func (h *Handler) getCreditStatus(w http.ResponseWriter, r *http.Request) {
 	sellerIDStr := r.URL.Query().Get("seller_id")
 	sellerID, err := uuid.Parse(sellerIDStr)
 	if err != nil {
-		response.Error(w, apperrors.BadRequest("invalid seller_id"))
+		response.Error(w, apperrors.BadRequest(apperrors.CodeValidationFailed, "invalid seller_id"))
 		return
 	}
 

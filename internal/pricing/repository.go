@@ -31,14 +31,6 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 	return &pgRepo{pool: pool}
 }
 
-func (r *pgRepo) conn(ctx context.Context) interface {
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	Exec(ctx context.Context, sql string, args ...interface{}) (interface{ RowsAffected() int64 }, error)
-} {
-	// Assume tx logic goes here if needed, use pool for now.
-	return r.pool
-}
 
 func (r *pgRepo) GetPriceForRole(ctx context.Context, productID uuid.UUID, partnerID *uuid.UUID, roleCode string, date time.Time) (*ProductPrice, error) {
 	// Query to find the most specific applicable price (partner-specific first, then role-specific).
@@ -55,7 +47,7 @@ func (r *pgRepo) GetPriceForRole(ctx context.Context, productID uuid.UUID, partn
 	`
 	
 	var p ProductPrice
-	err := r.conn(ctx).QueryRow(ctx, query, productID, roleCode, date, partnerID).Scan(
+	err := r.pool.QueryRow(ctx, query, productID, roleCode, date, partnerID).Scan(
 		&p.ID, &p.ProductID, &p.RoleCode, &p.PartnerID, &p.MRP, &p.BasePrice,
 		&p.EffectiveFrom, &p.EffectiveTo, &p.CreatedAt,
 	)
@@ -84,7 +76,7 @@ func (r *pgRepo) GetApplicableSchemes(ctx context.Context, productID uuid.UUID, 
 			  -- Category logic can be added here or resolved in service
 		  )
 	`
-	rows, err := r.conn(ctx).Query(ctx, query, date, roleCode, partnerID.String(), productID.String())
+	rows, err := r.pool.Query(ctx, query, date, roleCode, partnerID.String(), productID.String())
 	if err != nil {
 		return nil, fmt.Errorf("GetApplicableSchemes: %w", err)
 	}
@@ -109,7 +101,7 @@ func (r *pgRepo) SetProductPrice(ctx context.Context, price *ProductPrice) error
 			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 	price.ID = uuid.New()
 	price.CreatedAt = time.Now()
-	_, err := r.conn(ctx).Exec(ctx, query, price.ID, price.ProductID, price.RoleCode, price.PartnerID, price.MRP, price.BasePrice, price.EffectiveFrom, price.EffectiveTo, price.CreatedAt)
+	_, err := r.pool.Exec(ctx, query, price.ID, price.ProductID, price.RoleCode, price.PartnerID, price.MRP, price.BasePrice, price.EffectiveFrom, price.EffectiveTo, price.CreatedAt)
 	return err
 }
 
@@ -121,33 +113,33 @@ func (r *pgRepo) CreateScheme(ctx context.Context, scheme *Scheme) error {
 	if scheme.Status == "" {
 		scheme.Status = "active"
 	}
-	_, err := r.conn(ctx).Exec(ctx, query, scheme.ID, scheme.Name, scheme.Type, scheme.DiscountValue, scheme.BuyQty, scheme.GetQty, scheme.ValidFrom, scheme.ValidTo, scheme.IsExclusive, scheme.CreatedBy, scheme.Status, scheme.CreatedAt)
+	_, err := r.pool.Exec(ctx, query, scheme.ID, scheme.Name, scheme.Type, scheme.DiscountValue, scheme.BuyQty, scheme.GetQty, scheme.ValidFrom, scheme.ValidTo, scheme.IsExclusive, scheme.CreatedBy, scheme.Status, scheme.CreatedAt)
 	return err
 }
 
 func (r *pgRepo) AddSchemeApplicability(ctx context.Context, app *SchemeApplicability) error {
 	query := `INSERT INTO scheme_applicability (id, scheme_id, target_type, target_id) VALUES ($1, $2, $3, $4)`
 	app.ID = uuid.New()
-	_, err := r.conn(ctx).Exec(ctx, query, app.ID, app.SchemeID, app.TargetType, app.TargetID)
+	_, err := r.pool.Exec(ctx, query, app.ID, app.SchemeID, app.TargetType, app.TargetID)
 	return err
 }
 
 func (r *pgRepo) UpdateScheme(ctx context.Context, scheme *Scheme) error {
 	query := `UPDATE schemes SET name = $1, discount_value = $2, valid_from = $3, valid_to = $4, is_exclusive = $5 WHERE id = $6`
-	_, err := r.conn(ctx).Exec(ctx, query, scheme.Name, scheme.DiscountValue, scheme.ValidFrom, scheme.ValidTo, scheme.IsExclusive, scheme.ID)
+	_, err := r.pool.Exec(ctx, query, scheme.Name, scheme.DiscountValue, scheme.ValidFrom, scheme.ValidTo, scheme.IsExclusive, scheme.ID)
 	return err
 }
 
 func (r *pgRepo) SetSchemeStatus(ctx context.Context, id uuid.UUID, status string) error {
 	query := `UPDATE schemes SET status = $1 WHERE id = $2`
-	_, err := r.conn(ctx).Exec(ctx, query, status, id)
+	_, err := r.pool.Exec(ctx, query, status, id)
 	return err
 }
 
 func (r *pgRepo) GetSchemeByID(ctx context.Context, id uuid.UUID) (*Scheme, error) {
 	query := `SELECT id, name, type, discount_value, buy_qty, get_qty, valid_from, valid_to, is_exclusive, created_by, status, created_at FROM schemes WHERE id = $1`
 	var s Scheme
-	err := r.conn(ctx).QueryRow(ctx, query, id).Scan(
+	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&s.ID, &s.Name, &s.Type, &s.DiscountValue, &s.BuyQty, &s.GetQty,
 		&s.ValidFrom, &s.ValidTo, &s.IsExclusive, &s.CreatedBy, &s.Status, &s.CreatedAt,
 	)

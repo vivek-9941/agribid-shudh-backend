@@ -8,7 +8,6 @@ import (
 
 	"github.com/agribid/agribid-shudh-backend/internal/catalog"
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
-	"github.com/agribid/agribid-shudh-backend/internal/invoice"
 	"github.com/agribid/agribid-shudh-backend/internal/partner"
 	"github.com/google/uuid"
 )
@@ -21,10 +20,16 @@ type PartnerService interface {
 	GetPartner(ctx context.Context, id uuid.UUID) (*partner.Partner, error)
 }
 
-// InvoiceService defines the methods we need from the invoice package.
-// Actually, we can define a small repo interface for HSN rates if not in invoice service.
+type HSNTaxRate struct {
+	HSNCode  string
+	CGSTRate string
+	SGSTRate string
+	IGSTRate string
+	CessRate string
+}
+
 type HSNSvc interface {
-	GetHSNRate(ctx context.Context, hsnCode string) (*invoice.HSNTaxRate, error)
+	GetHSNRate(ctx context.Context, hsnCode string) (*HSNTaxRate, error)
 }
 
 type Service struct {
@@ -123,27 +128,28 @@ func (s *Service) CalculateLinePrice(ctx context.Context, productID uuid.UUID, q
 		buyerStateCode = *buyer.StateCode
 	}
 	
-	gstType := invoice.DetermineGSTType(sellerStateCode, buyerStateCode)
-	
 	hsnRate, err := s.hsnSvc.GetHSNRate(ctx, prod.HSNCode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HSN rate: %w", err)
 	}
 	
 	taxableStr := formatDecimal(taxableAmountRat)
-	var taxBreakdown *invoice.TaxBreakdown
+	cgstRate, sgstRate, igstRate := "0.00", "0.00", "0.00"
+	cgstAmtRat, sgstAmtRat, igstAmtRat := new(big.Rat).SetInt64(0), new(big.Rat).SetInt64(0), new(big.Rat).SetInt64(0)
+	hundred := new(big.Rat).SetInt64(100)
+
 	if hsnRate != nil {
-		taxBreakdown, err = invoice.CalculateLineTax(taxableStr, hsnRate, gstType)
-		if err != nil {
-			return nil, fmt.Errorf("failed to calculate tax: %w", err)
-		}
-	} else {
-		// zero tax fallback
-		taxBreakdown = &invoice.TaxBreakdown{
-			CGSTRate: "0.00", CGSTAmount: "0.00",
-			SGSTRate: "0.00", SGSTAmount: "0.00",
-			IGSTRate: "0.00", IGSTAmount: "0.00",
-			TotalTax: "0.00",
+		if sellerStateCode != "" && sellerStateCode == buyerStateCode {
+			cgstRate = hsnRate.CGSTRate
+			sgstRate = hsnRate.SGSTRate
+			rC, _ := new(big.Rat).SetString(cgstRate)
+			cgstAmtRat = new(big.Rat).Quo(new(big.Rat).Mul(taxableAmountRat, rC), hundred)
+			rS, _ := new(big.Rat).SetString(sgstRate)
+			sgstAmtRat = new(big.Rat).Quo(new(big.Rat).Mul(taxableAmountRat, rS), hundred)
+		} else {
+			igstRate = hsnRate.IGSTRate
+			rI, _ := new(big.Rat).SetString(igstRate)
+			igstAmtRat = new(big.Rat).Quo(new(big.Rat).Mul(taxableAmountRat, rI), hundred)
 		}
 	}
 
@@ -151,16 +157,17 @@ func (s *Service) CalculateLinePrice(ctx context.Context, productID uuid.UUID, q
 		BasePrice:      price.BasePrice,
 		DiscountAmount: formatDecimal(discountAmountRat),
 		TaxableAmount:  taxableStr,
-		CGSTRate:       taxBreakdown.CGSTRate,
-		CGSTAmount:     taxBreakdown.CGSTAmount,
-		SGSTRate:       taxBreakdown.SGSTRate,
-		SGSTAmount:     taxBreakdown.SGSTAmount,
-		IGSTRate:       taxBreakdown.IGSTRate,
-		IGSTAmount:     taxBreakdown.IGSTAmount,
+		CGSTRate:       cgstRate,
+		CGSTAmount:     formatDecimal(cgstAmtRat),
+		SGSTRate:       sgstRate,
+		SGSTAmount:     formatDecimal(sgstAmtRat),
+		IGSTRate:       igstRate,
+		IGSTAmount:     formatDecimal(igstAmtRat),
 		AppliedSchemes: appliedSchemes,
 	}
 
-	totalTaxRat, _ := new(big.Rat).SetString(taxBreakdown.TotalTax)
+	totalTaxRat := new(big.Rat).Add(cgstAmtRat, sgstAmtRat)
+	totalTaxRat.Add(totalTaxRat, igstAmtRat)
 	lineTotalRat := new(big.Rat).Add(taxableAmountRat, totalTaxRat)
 	res.LineTotal = formatDecimal(lineTotalRat)
 
@@ -175,13 +182,13 @@ func formatDecimal(r *big.Rat) string {
 func (s *Service) SetProductPrice(ctx context.Context, req *SetPriceRequest, productID uuid.UUID) (*ProductPrice, error) {
 	effectiveFrom, err := time.Parse(time.RFC3339, req.EffectiveFrom)
 	if err != nil {
-		return nil, apperrors.BadRequest("invalid effective_from format")
+		return nil, apperrors.BadRequest(apperrors.CodeValidationFailed, "invalid effective_from format")
 	}
 	var effectiveTo *time.Time
 	if req.EffectiveTo != "" {
 		et, err := time.Parse(time.RFC3339, req.EffectiveTo)
 		if err != nil {
-			return nil, apperrors.BadRequest("invalid effective_to format")
+			return nil, apperrors.BadRequest(apperrors.CodeValidationFailed, "invalid effective_to format")
 		}
 		effectiveTo = &et
 	}
@@ -210,11 +217,11 @@ func (s *Service) SetProductPrice(ctx context.Context, req *SetPriceRequest, pro
 func (s *Service) CreateScheme(ctx context.Context, userID uuid.UUID, req *CreateSchemeRequest) (*Scheme, error) {
 	vf, err := time.Parse(time.RFC3339, req.ValidFrom)
 	if err != nil {
-		return nil, apperrors.BadRequest("invalid valid_from")
+		return nil, apperrors.BadRequest(apperrors.CodeValidationFailed, "invalid valid_from")
 	}
 	vt, err := time.Parse(time.RFC3339, req.ValidTo)
 	if err != nil {
-		return nil, apperrors.BadRequest("invalid valid_to")
+		return nil, apperrors.BadRequest(apperrors.CodeValidationFailed, "invalid valid_to")
 	}
 
 	scheme := &Scheme{

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,12 +40,6 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 	return &pgRepo{pool: pool}
 }
 
-func (r *pgRepo) conn(ctx context.Context) interface {
-	Exec(ctx context.Context, sql string, args ...interface{}) (interface{ RowsAffected() int64 }, error)
-} {
-	return r.pool
-}
-
 func (r *pgRepo) Insert(ctx context.Context, log *AuditLog) error {
 	query := `INSERT INTO audit_logs (id, user_id, action, resource, resource_id, method, path, status_code, ip_address, user_agent, request_size, response_size, duration_ms, request_data, response_data, created_at)
 			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
@@ -54,7 +47,7 @@ func (r *pgRepo) Insert(ctx context.Context, log *AuditLog) error {
 	log.ID = uuid.New()
 	log.CreatedAt = time.Now()
 	
-	_, err := r.conn(ctx).Exec(ctx, query,
+	_, err := r.pool.Exec(ctx, query,
 		log.ID, log.UserID, log.Action, log.Resource, log.ResourceID,
 		log.Method, log.Path, log.StatusCode, log.IPAddress, log.UserAgent,
 		log.RequestSize, log.ResponseSize, log.DurationMs,

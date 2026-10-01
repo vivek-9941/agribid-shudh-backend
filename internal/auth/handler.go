@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
-	"github.com/agribid/agribid-shudh-backend/internal/middleware"
 	"github.com/agribid/agribid-shudh-backend/internal/response"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
@@ -122,7 +121,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 // Logout handles POST /api/v1/auth/logout.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	userCtx := middleware.GetUserContext(r.Context())
+	userCtx := GetUserContext(r.Context())
 	if userCtx == nil {
 		response.Error(w, apperrors.Unauthorized("authentication required"))
 		return
@@ -138,7 +137,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 
 // GetMe handles GET /api/v1/auth/me.
 func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
-	userCtx := middleware.GetUserContext(r.Context())
+	userCtx := GetUserContext(r.Context())
 	if userCtx == nil {
 		response.Error(w, apperrors.Unauthorized("authentication required"))
 		return

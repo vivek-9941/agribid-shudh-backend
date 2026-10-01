@@ -45,6 +45,7 @@ type RefreshToken struct {
 // UserContext is extracted from the JWT and injected into request context.
 // It is used by all downstream handlers and services for auth/scoping decisions.
 type UserContext struct {
+	ID        uuid.UUID `json:"id"`
 	UserID    uuid.UUID `json:"user_id"`
 	PartnerID uuid.UUID `json:"partner_id"`
 	Roles     []string  `json:"roles"`

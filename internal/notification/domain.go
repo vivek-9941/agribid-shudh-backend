@@ -27,28 +27,29 @@ const (
 	ChannelPush  = "push"
 )
 
+type EventType string
+
 // Notification represents a notification sent to a user.
 type Notification struct {
-	ID         uuid.UUID  `json:"id"`
-	UserID     uuid.UUID  `json:"user_id"`
-	EventType  string     `json:"event_type"`
-	Channel    string     `json:"channel"`
-	Title      string     `json:"title"`
-	Body       string     `json:"body"`
-	Status     string     `json:"status"` // pending, sent, failed
-	ReadAt     *time.Time `json:"read_at,omitempty"`
-	SentAt     *time.Time `json:"sent_at,omitempty"`
-	RetryCount int        `json:"retry_count"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID          uuid.UUID  `json:"id"`
+	RecipientID uuid.UUID  `json:"recipient_id"`
+	Type        string     `json:"type"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	DataPayload []byte     `json:"data_payload,omitempty"`
+	IsRead      bool       `json:"is_read"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 // NotificationPreference represents a user's channel preference for an event.
 type NotificationPreference struct {
-	ID        uuid.UUID `json:"id"`
-	UserID    uuid.UUID `json:"user_id"`
-	EventType string    `json:"event_type"`
-	Channel   string    `json:"channel"`
-	Enabled   bool      `json:"enabled"`
+	ID           uuid.UUID `json:"id"`
+	UserID       uuid.UUID `json:"user_id"`
+	EmailEnabled bool      `json:"email_enabled"`
+	SMSEnabled   bool      `json:"sms_enabled"`
+	InAppEnabled bool      `json:"in_app_enabled"`
+	MutedEvents  []string  `json:"muted_events,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // NotificationTemplate holds a message template for an event.

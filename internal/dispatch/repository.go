@@ -26,13 +26,6 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 	return &pgRepo{pool: pool}
 }
 
-func (r *pgRepo) conn(ctx context.Context) interface {
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	Exec(ctx context.Context, sql string, args ...interface{}) (interface{ RowsAffected() int64 }, error)
-} {
-	return r.pool
-}
 
 func (r *pgRepo) Create(ctx context.Context, s *Shipment) error {
 	query := `INSERT INTO shipments (id, tracking_number, order_id, seller_id, delivery_partner_id, status, vehicle_number, driver_name, driver_phone, pod_url, estimated_delivery, shipped_at, delivered_at, created_at, updated_at)
@@ -43,7 +36,7 @@ func (r *pgRepo) Create(ctx context.Context, s *Shipment) error {
 	if s.Status == "" {
 		s.Status = StatusPending
 	}
-	_, err := r.conn(ctx).Exec(ctx, query,
+	_, err := r.pool.Exec(ctx, query,
 		s.ID, s.TrackingNumber, s.OrderID, s.SellerID, s.DeliveryPartnerID, s.Status,
 		s.VehicleNumber, s.DriverName, s.DriverPhone, s.PODURL, s.EstimatedDelivery,
 		s.ShippedAt, s.DeliveredAt, s.CreatedAt, s.UpdatedAt)
@@ -54,7 +47,7 @@ func (r *pgRepo) GetByID(ctx context.Context, id uuid.UUID) (*Shipment, error) {
 	query := `SELECT id, tracking_number, order_id, seller_id, delivery_partner_id, status, vehicle_number, driver_name, driver_phone, pod_url, estimated_delivery, shipped_at, delivered_at, created_at, updated_at
 			  FROM shipments WHERE id = $1`
 	var s Shipment
-	err := r.conn(ctx).QueryRow(ctx, query, id).Scan(
+	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&s.ID, &s.TrackingNumber, &s.OrderID, &s.SellerID, &s.DeliveryPartnerID, &s.Status,
 		&s.VehicleNumber, &s.DriverName, &s.DriverPhone, &s.PODURL, &s.EstimatedDelivery,
 		&s.ShippedAt, &s.DeliveredAt, &s.CreatedAt, &s.UpdatedAt,
@@ -70,7 +63,7 @@ func (r *pgRepo) GetByID(ctx context.Context, id uuid.UUID) (*Shipment, error) {
 
 func (r *pgRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status ShipmentStatus) error {
 	query := `UPDATE shipments SET status = $1, updated_at = $2 WHERE id = $3`
-	_, err := r.conn(ctx).Exec(ctx, query, status, time.Now(), id)
+	_, err := r.pool.Exec(ctx, query, status, time.Now(), id)
 	return err
 }
 
@@ -79,7 +72,7 @@ func (r *pgRepo) AddEvent(ctx context.Context, event *ShipmentEvent) error {
 			  VALUES ($1, $2, $3, $4, $5, $6)`
 	event.ID = uuid.New()
 	event.CreatedAt = time.Now()
-	_, err := r.conn(ctx).Exec(ctx, query, event.ID, event.ShipmentID, event.Status, event.Location, event.Notes, event.CreatedAt)
+	_, err := r.pool.Exec(ctx, query, event.ID, event.ShipmentID, event.Status, event.Location, event.Notes, event.CreatedAt)
 	return err
 }
 
