@@ -17,10 +17,10 @@ type Handler struct {
 }
 
 // NewHandler creates a new auth handler.
-func NewHandler(service *Service) *Handler {
+func NewHandler(service *Service, val *validator.Validate) *Handler {
 	return &Handler{
 		service:  service,
-		validate: validator.New(),
+		validate: val,
 	}
 }
 
