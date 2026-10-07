@@ -93,7 +93,7 @@ func (h *Handler) recordInspection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req RecordInspectionRequest
+	var req InspectionInput
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, err)
 		return
