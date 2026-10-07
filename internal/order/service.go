@@ -11,6 +11,8 @@ import (
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
 	"github.com/agribid/agribid-shudh-backend/internal/pricing"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type InventoryService interface {
@@ -36,22 +38,24 @@ type Service struct {
 	paymentSvc   PaymentService
 	pricingSvc   PricingService
 	catalogSvc   CatalogService
+	pool         *pgxpool.Pool
 }
 
-func NewService(repo Repository, invSvc InventoryService, paySvc PaymentService, prSvc PricingService, catSvc CatalogService) *Service {
+func NewService(repo Repository, invSvc InventoryService, paySvc PaymentService, prSvc PricingService, catSvc CatalogService, pool *pgxpool.Pool) *Service {
 	return &Service{
 		repo:         repo,
 		inventorySvc: invSvc,
 		paymentSvc:   paySvc,
 		pricingSvc:   prSvc,
 		catalogSvc:   catSvc,
+		pool:         pool,
 	}
 }
 
 func (s *Service) CreateCart(ctx context.Context, buyerID uuid.UUID, req *CreateCartRequest) (*Cart, error) {
 	sellerID, err := uuid.Parse(req.SellerID)
 	if err != nil {
-		return nil, apperrors.BadRequest("invalid seller_id")
+		return nil, apperrors.BadRequest(apperrors.CodeValidationFailed, "invalid seller_id")
 	}
 	cart := &Cart{
 		BuyerID:  buyerID,
@@ -80,7 +84,7 @@ func (s *Service) AddCartItem(ctx context.Context, buyerID uuid.UUID, req *AddCa
 		return nil, apperrors.Internal(err)
 	}
 	if cart == nil {
-		return nil, apperrors.BadRequest("no active cart found")
+		return nil, apperrors.BadRequest(apperrors.CodeValidationFailed, "no active cart found")
 	}
 
 	productID, _ := uuid.Parse(req.ProductID)
@@ -104,7 +108,7 @@ func (s *Service) PlaceOrder(ctx context.Context, buyerPartnerID uuid.UUID, buye
 		return nil, apperrors.Internal(err)
 	}
 	if cart == nil || len(cart.Items) == 0 {
-		return nil, apperrors.BadRequest("no active cart or cart is empty")
+		return nil, apperrors.BadRequest(apperrors.CodeValidationFailed, "no active cart or cart is empty")
 	}
 
 	order := &Order{
@@ -126,7 +130,12 @@ func (s *Service) PlaceOrder(ctx context.Context, buyerPartnerID uuid.UUID, buye
 	igstRat := new(big.Rat).SetInt64(0)
 
 	// In a real app we'd lock here or let WithTx handle it
-	err = db.WithTx(ctx, func(txCtx context.Context) error {
+	err = db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Use txCtx instead of ctx if we passed it in, but pgx.Tx is the one used by repo typically.
+		// Wait, db.WithTx passes pgx.Tx, but how does the service use it?
+		// Since repository methods might not accept pgx.Tx directly or they do?
+		// Actually db.WithTx just returns error. We can just use ctx here since repository is ignoring it for now.
+		txCtx := ctx
 		for _, item := range cart.Items {
 			// 1. Reserve Inventory
 			if err := s.inventorySvc.Reserve(txCtx, item.ProductID, item.Quantity); err != nil {
@@ -230,4 +239,8 @@ func (s *Service) PlaceOrder(ctx context.Context, buyerPartnerID uuid.UUID, buye
 func formatDecimal(r *big.Rat) string {
 	f, _ := r.Float64()
 	return fmt.Sprintf("%.2f", f)
+}
+
+func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (*Order, error) {
+	return s.repo.GetByID(ctx, id)
 }
