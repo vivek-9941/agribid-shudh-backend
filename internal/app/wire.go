@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"github.com/agribid/agribid-shudh-backend/internal/audit"
 	"github.com/agribid/agribid-shudh-backend/internal/auth"
 	"github.com/agribid/agribid-shudh-backend/internal/catalog"
@@ -18,6 +20,24 @@ import (
 	"github.com/go-playground/validator/v10"
 	"go.uber.org/zap"
 )
+
+type hsnAdapter struct {
+	svc *invoice.HSNStubService
+}
+
+func (h *hsnAdapter) GetHSNRate(ctx context.Context, hsnCode string) (*pricing.HSNTaxRate, error) {
+	r, err := h.svc.GetHSNRate(ctx, hsnCode)
+	if err != nil {
+		return nil, err
+	}
+	return &pricing.HSNTaxRate{
+		HSNCode:  r.HSNCode,
+		CGSTRate: r.CGSTRate,
+		SGSTRate: r.SGSTRate,
+		IGSTRate: r.IGSTRate,
+		CessRate: r.CessRate,
+	}, nil
+}
 
 // WireModules wires up all the modules and registers their routes.
 func (a *App) WireModules(val *validator.Validate, logger *zap.Logger) {
@@ -42,28 +62,29 @@ func (a *App) WireModules(val *validator.Validate, logger *zap.Logger) {
 	pdfGen := integration.NewMockPDFGenerator()
 
 	// Services
-	authSvc := auth.NewService(authRepo, nil) // Config injected for tokens etc
+	authSvc := auth.NewService(authRepo, nil, smsProv) // Config injected for tokens etc
 	_ = authSvc
-	partnerSvc := partner.NewService(partnerRepo, nil)
+	partnerSvc := partner.NewService(partnerRepo)
 	catalogSvc := catalog.NewService(catalogRepo)
 	
 	// Pricing needs catalog, partner, and invoice(hsn)
-	hsnSvc := invoice.NewHSNStubService() // We'd need an implementation
+	invHSNSvc := invoice.NewHSNStubService() // We'd need an implementation
+	hsnSvc := &hsnAdapter{svc: invHSNSvc}
 	pricingSvc := pricing.NewService(pricingRepo, catalogSvc, partnerSvc, hsnSvc)
 	
-	paySvc := payment.NewService(paymentRepo)
-	invcSvc := invoice.NewService(invoiceRepo, nil, partnerSvc, pdfGen)
+	paySvc := payment.NewService(paymentRepo, a.Pool)
+	invcSvc := invoice.NewService(invoiceRepo, nil, partnerSvc, pdfGen, a.Pool)
 	
 	// Order needs inventory, payment, pricing, catalog
-	orderSvc := order.NewService(orderRepo, nil, paySvc, pricingSvc, catalogSvc)
+	orderSvc := order.NewService(orderRepo, nil, paySvc, pricingSvc, catalogSvc, a.Pool)
 	
 	// Set circular dependencies after init
 	invcSvc.SetOrderService(orderSvc)
 	
-	fulfillmentSvc := fulfillment.NewService(fulfillmentRepo, orderRepo, nil)
+	fulfillmentSvc := fulfillment.NewService(fulfillmentRepo, orderRepo, nil, a.Pool)
 	
-	dispatchSvc := dispatch.NewService(dispatchRepo, fulfillmentSvc)
-	returnsSvc := returns.NewService(returnsRepo, orderSvc, nil, invcSvc, paySvc)
+	dispatchSvc := dispatch.NewService(dispatchRepo, fulfillmentSvc, a.Pool)
+	returnsSvc := returns.NewService(returnsRepo, orderSvc, nil, invcSvc, paySvc, a.Pool)
 	notifSvc := notification.NewService(notifRepo, emailProv, smsProv, logger)
 	dashSvc := dashboard.NewService(dashRepo)
 
@@ -76,11 +97,11 @@ func (a *App) WireModules(val *validator.Validate, logger *zap.Logger) {
 	authHnd.RegisterRoutes(a.Router)
 
 	// Partner
-	partnerHnd := partner.NewHandler(partnerSvc, val)
+	partnerHnd := partner.NewHandler(partnerSvc)
 	partnerHnd.RegisterRoutes(a.Router)
 
 	// Catalog
-	catalogHnd := catalog.NewHandler(catalogSvc, val)
+	catalogHnd := catalog.NewHandler(catalogSvc)
 	catalogHnd.RegisterRoutes(a.Router)
 	
 	// Pricing
