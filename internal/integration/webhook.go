@@ -1,31 +1,47 @@
 package integration
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
+	"github.com/agribid/agribid-shudh-backend/internal/dispatch"
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
 	"github.com/agribid/agribid-shudh-backend/internal/logger"
+	"github.com/agribid/agribid-shudh-backend/internal/payment"
 	"github.com/agribid/agribid-shudh-backend/internal/response"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-// WebhookHandler handles incoming webhooks from external providers.
+type PaymentService interface {
+	RecordPayment(ctx context.Context, req *payment.RecordPaymentRequest, buyerID uuid.UUID) (*payment.Payment, error)
+}
+
+type DispatchService interface {
+	UpdateShipmentStatus(ctx context.Context, req *dispatch.UpdateStatusRequest, shipmentID, userID uuid.UUID) error
+}
+
 type WebhookHandler struct {
-	paymentWebhookSecret string
+	paymentWebhookSecret  string
 	deliveryWebhookSecret string
+	paymentSvc            PaymentService
+	dispatchSvc           DispatchService
 }
 
 // NewWebhookHandler creates a new webhook handler.
-func NewWebhookHandler(paymentSecret, deliverySecret string) *WebhookHandler {
+func NewWebhookHandler(paymentSecret, deliverySecret string, paymentSvc PaymentService, dispatchSvc DispatchService) *WebhookHandler {
 	return &WebhookHandler{
 		paymentWebhookSecret:  paymentSecret,
 		deliveryWebhookSecret: deliverySecret,
+		paymentSvc:            paymentSvc,
+		dispatchSvc:           dispatchSvc,
 	}
 }
 
@@ -62,7 +78,33 @@ func (h *WebhookHandler) HandlePaymentWebhook(w http.ResponseWriter, r *http.Req
 		zap.Any("payload", payload),
 	)
 
-	// TODO: Process payment confirmation → call payment.Service.RecordPayment
+	// Process payment confirmation → call payment.Service.RecordPayment
+	if pld, ok := payload["payload"].(map[string]interface{}); ok {
+		if payInfo, ok := pld["payment"].(map[string]interface{}); ok {
+			if entity, ok := payInfo["entity"].(map[string]interface{}); ok {
+				notes, _ := entity["notes"].(map[string]interface{})
+				if notes != nil {
+					buyerIDStr, _ := notes["buyer_id"].(string)
+					sellerIDStr, _ := notes["seller_id"].(string)
+					amountF, _ := entity["amount"].(float64)
+					amountStr := fmt.Sprintf("%.2f", amountF/100)
+					refNum, _ := entity["id"].(string)
+					method, _ := entity["method"].(string)
+					
+					buyerID, err := uuid.Parse(buyerIDStr)
+					if err == nil && h.paymentSvc != nil {
+						req := &payment.RecordPaymentRequest{
+							SellerID:        sellerIDStr,
+							Amount:          amountStr,
+							Method:          method,
+							ReferenceNumber: refNum,
+						}
+						h.paymentSvc.RecordPayment(r.Context(), req, buyerID)
+					}
+				}
+			}
+		}
+	}
 
 	response.JSON(w, http.StatusOK, map[string]string{"status": "received"})
 }
@@ -91,7 +133,17 @@ func (h *WebhookHandler) HandleDeliveryWebhook(w http.ResponseWriter, r *http.Re
 		zap.Any("payload", payload),
 	)
 
-	// TODO: Process delivery update → call dispatch.Service.UpdateShipmentStatus
+	// Process delivery update → call dispatch.Service.UpdateShipmentStatus
+	if shipmentIDStr, ok := payload["shipment_id"].(string); ok {
+		shipmentID, err := uuid.Parse(shipmentIDStr)
+		if err == nil && h.dispatchSvc != nil {
+			status, _ := payload["status"].(string)
+			req := &dispatch.UpdateStatusRequest{
+				Status: status,
+			}
+			h.dispatchSvc.UpdateShipmentStatus(r.Context(), req, shipmentID, uuid.Nil)
+		}
+	}
 
 	response.JSON(w, http.StatusOK, map[string]string{"status": "received"})
 }
