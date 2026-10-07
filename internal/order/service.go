@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/agribid/agribid-shudh-backend/internal/catalog"
 	"github.com/agribid/agribid-shudh-backend/internal/db"
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
 	"github.com/agribid/agribid-shudh-backend/internal/pricing"
@@ -26,7 +27,7 @@ type PricingService interface {
 }
 
 type CatalogService interface {
-	GetProduct(ctx context.Context, id uuid.UUID) (interface{}, error)
+	GetProduct(ctx context.Context, id uuid.UUID) (*catalog.Product, error)
 }
 
 type Service struct {
@@ -132,7 +133,13 @@ func (s *Service) PlaceOrder(ctx context.Context, buyerPartnerID uuid.UUID, buye
 				return fmt.Errorf("inventory reserve failed: %w", err)
 			}
 
-			// 2. Compute Price
+			// 2. Fetch Product for SKU and Name
+			prod, err := s.catalogSvc.GetProduct(txCtx, item.ProductID)
+			if err != nil {
+				return fmt.Errorf("failed to fetch product: %w", err)
+			}
+
+			// 3. Compute Price
 			priceRes, err := s.pricingSvc.CalculateLinePrice(txCtx, item.ProductID, item.Quantity, buyerPartnerID, buyerRole)
 			if err != nil {
 				return fmt.Errorf("price calc failed: %w", err)
@@ -160,8 +167,8 @@ func (s *Service) PlaceOrder(ctx context.Context, buyerPartnerID uuid.UUID, buye
 
 			line := &OrderLine{
 				ProductID:      item.ProductID,
-				SKU:            "TODO-SKU",
-				ProductName:    "TODO-NAME",
+				SKU:            prod.SKU,
+				ProductName:    prod.Name,
 				OrderedQty:     item.Quantity,
 				UnitPrice:      priceRes.BasePrice,
 				DiscountAmount: priceRes.DiscountAmount,
