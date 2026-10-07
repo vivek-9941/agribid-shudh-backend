@@ -18,11 +18,17 @@ import (
 type Service struct {
 	repo       Repository
 	jwt        *JWTService
+	smsProvider SMSProvider
+}
+
+// SMSProvider interface for decoupling
+type SMSProvider interface {
+	SendSMS(ctx context.Context, to string, message string) error
 }
 
 // NewService creates a new auth service.
-func NewService(repo Repository, jwt *JWTService) *Service {
-	return &Service{repo: repo, jwt: jwt}
+func NewService(repo Repository, jwt *JWTService, smsProvider SMSProvider) *Service {
+	return &Service{repo: repo, jwt: jwt, smsProvider: smsProvider}
 }
 
 // SendOTP generates a 6-digit OTP, hashes it, and stores an OTP session.
@@ -52,8 +58,14 @@ func (s *Service) SendOTP(ctx context.Context, phone string) error {
 		return apperrors.Internal(fmt.Errorf("create OTP session: %w", err))
 	}
 
-	// TODO: Dispatch OTP via SMS provider (integration layer)
-	// For now, OTP is stored and would be visible in logs during development.
+	// Dispatch OTP via SMS provider
+	if s.smsProvider != nil {
+		msg := fmt.Sprintf("Your Agribid Shudh OTP is: %s. Valid for 10 minutes.", otp)
+		if err := s.smsProvider.SendSMS(ctx, phone, msg); err != nil {
+			// Log error but don't fail the request completely since we might be in dev mode
+			fmt.Printf("Failed to send OTP SMS: %v\n", err)
+		}
+	}
 
 	return nil
 }
