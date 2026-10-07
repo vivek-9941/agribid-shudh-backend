@@ -3,6 +3,7 @@ package invoice
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/agribid/agribid-shudh-backend/internal/db"
@@ -106,11 +107,11 @@ func (s *Service) GenerateForOrder(ctx context.Context, orderID uuid.UUID) (*Inv
 			UnitPrice:      line.UnitPrice,
 			DiscountAmount: line.DiscountAmount,
 			TaxableAmount:  line.TaxableAmount,
-			CGSTRate:       "TODO", // We'd ideally store rates in order line, but this is simplified
+			CGSTRate:       calculateRate(line.CGSTAmount, line.TaxableAmount),
 			CGSTAmount:     line.CGSTAmount,
-			SGSTRate:       "TODO",
+			SGSTRate:       calculateRate(line.SGSTAmount, line.TaxableAmount),
 			SGSTAmount:     line.SGSTAmount,
-			IGSTRate:       "TODO",
+			IGSTRate:       calculateRate(line.IGSTAmount, line.TaxableAmount),
 			IGSTAmount:     line.IGSTAmount,
 			LineTotal:      line.LineTotal,
 		}
@@ -157,4 +158,17 @@ func (s *Service) GenerateForOrder(ctx context.Context, orderID uuid.UUID) (*Inv
 	}()
 
 	return inv, nil
+}
+
+func calculateRate(taxAmount, taxableAmount string) string {
+	tax, _ := new(big.Rat).SetString(taxAmount)
+	taxable, _ := new(big.Rat).SetString(taxableAmount)
+	if taxable == nil || taxable.Sign() == 0 || tax == nil || tax.Sign() == 0 {
+		return "0.00"
+	}
+	hundred := new(big.Rat).SetInt64(100)
+	rate := new(big.Rat).Mul(tax, hundred)
+	rate.Quo(rate, taxable)
+	f, _ := rate.Float64()
+	return fmt.Sprintf("%.2f", f)
 }
