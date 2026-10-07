@@ -17,7 +17,7 @@ type CatalogService interface {
 }
 
 type PartnerService interface {
-	GetPartner(ctx context.Context, id uuid.UUID) (*partner.Partner, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*partner.Partner, error)
 }
 
 type HSNTaxRate struct {
@@ -109,7 +109,7 @@ func (s *Service) CalculateLinePrice(ctx context.Context, productID uuid.UUID, q
 	}
 	
 	// Get buyer to get state code
-	buyer, err := s.partnerSvc.GetPartner(ctx, buyerPartnerID)
+	buyer, err := s.partnerSvc.GetByID(ctx, buyerPartnerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get buyer: %w", err)
 	}
@@ -118,7 +118,7 @@ func (s *Service) CalculateLinePrice(ctx context.Context, productID uuid.UUID, q
 	// For simplicity in this implementation, we assume parent is seller.
 	var sellerStateCode string
 	if buyer.ParentID != nil {
-		seller, err := s.partnerSvc.GetPartner(ctx, *buyer.ParentID)
+		seller, err := s.partnerSvc.GetByID(ctx, *buyer.ParentID)
 		if err == nil && seller != nil && seller.StateCode != nil {
 			sellerStateCode = *seller.StateCode
 		}
