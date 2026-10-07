@@ -11,6 +11,8 @@ import (
 	"github.com/agribid/agribid-shudh-backend/internal/order"
 	"github.com/agribid/agribid-shudh-backend/internal/partner"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type OrderService interface {
@@ -18,12 +20,12 @@ type OrderService interface {
 }
 
 type PartnerService interface {
-	GetPartner(ctx context.Context, id uuid.UUID) (*partner.Partner, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*partner.Partner, error)
 }
 
 // PDFGenerator defines an interface for PDF generation.
 type PDFGenerator interface {
-	GenerateInvoicePDF(inv *Invoice) (string, error)
+	GenerateInvoicePDF(inv interface{}) (string, error)
 }
 
 type Service struct {
@@ -31,14 +33,16 @@ type Service struct {
 	orderSvc  OrderService
 	partnerSvc PartnerService
 	pdfGen    PDFGenerator
+	pool      *pgxpool.Pool
 }
 
-func NewService(repo Repository, orderSvc OrderService, partnerSvc PartnerService, pdfGen PDFGenerator) *Service {
+func NewService(repo Repository, orderSvc OrderService, partnerSvc PartnerService, pdfGen PDFGenerator, pool *pgxpool.Pool) *Service {
 	return &Service{
 		repo:       repo,
 		orderSvc:   orderSvc,
 		partnerSvc: partnerSvc,
 		pdfGen:     pdfGen,
+		pool:       pool,
 	}
 }
 
@@ -57,11 +61,11 @@ func (s *Service) GenerateForOrder(ctx context.Context, orderID uuid.UUID) (*Inv
 	}
 
 	// 2. Fetch Seller & Buyer for GSTIN & State Code
-	seller, err := s.partnerSvc.GetPartner(ctx, ord.SellerID)
+	seller, err := s.partnerSvc.GetByID(ctx, ord.SellerID)
 	if err != nil || seller == nil {
 		return nil, fmt.Errorf("failed to get seller: %w", err)
 	}
-	buyer, err := s.partnerSvc.GetPartner(ctx, ord.BuyerID)
+	buyer, err := s.partnerSvc.GetByID(ctx, ord.BuyerID)
 	if err != nil || buyer == nil {
 		return nil, fmt.Errorf("failed to get buyer: %w", err)
 	}
@@ -118,7 +122,8 @@ func (s *Service) GenerateForOrder(ctx context.Context, orderID uuid.UUID) (*Inv
 		inv.Lines = append(inv.Lines, invLine)
 	}
 
-	err = db.WithTx(ctx, func(txCtx context.Context) error {
+	err = db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		txCtx := ctx
 		invoiceNo, err := s.repo.GetNextInvoiceNumber(txCtx, ord.SellerID)
 		if err != nil {
 			return err
@@ -171,4 +176,8 @@ func calculateRate(taxAmount, taxableAmount string) string {
 	rate.Quo(rate, taxable)
 	f, _ := rate.Float64()
 	return fmt.Sprintf("%.2f", f)
+}
+
+func (s *Service) CreateCreditNote(ctx context.Context, cn *CreditNote) error {
+	return s.repo.CreateCreditNote(ctx, cn)
 }
