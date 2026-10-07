@@ -9,6 +9,8 @@ import (
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
 	"github.com/agribid/agribid-shudh-backend/internal/order"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type InventoryService interface {
@@ -25,18 +27,21 @@ type Service struct {
 	repo         Repository
 	orderRepo    OrderRepository
 	inventorySvc InventoryService
+	pool         *pgxpool.Pool
 }
 
-func NewService(repo Repository, orderRepo OrderRepository, invSvc InventoryService) *Service {
+func NewService(repo Repository, orderRepo OrderRepository, invSvc InventoryService, pool *pgxpool.Pool) *Service {
 	return &Service{
 		repo:         repo,
 		orderRepo:    orderRepo,
 		inventorySvc: invSvc,
+		pool:         pool,
 	}
 }
 
 func (s *Service) UpdateOrderStatus(ctx context.Context, orderID uuid.UUID, userID uuid.UUID, newStatus string, reason string) error {
-	return db.WithTx(ctx, func(txCtx context.Context) error {
+	return db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		txCtx := ctx
 		ord, err := s.orderRepo.GetByID(txCtx, orderID)
 		if err != nil {
 			return apperrors.Internal(err)
@@ -49,7 +54,7 @@ func (s *Service) UpdateOrderStatus(ctx context.Context, orderID uuid.UUID, user
 		toStatus := order.OrderStatus(newStatus)
 
 		if !order.CanTransition(fromStatus, toStatus) {
-			return apperrors.BadRequest(fmt.Sprintf("invalid transition from %s to %s", fromStatus, toStatus))
+			return apperrors.BadRequest(apperrors.CodeValidationFailed, fmt.Sprintf("invalid transition from %s to %s", fromStatus, toStatus))
 		}
 
 		if err := s.orderRepo.UpdateOrderStatus(txCtx, orderID, toStatus); err != nil {
@@ -93,7 +98,8 @@ func (s *Service) UpdateOrderStatus(ctx context.Context, orderID uuid.UUID, user
 }
 
 func (s *Service) RecordPartialFulfillment(ctx context.Context, orderID uuid.UUID, userID uuid.UUID, req *RecordPartialRequest) error {
-	return db.WithTx(ctx, func(txCtx context.Context) error {
+	return db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		txCtx := ctx
 		ord, err := s.orderRepo.GetByID(txCtx, orderID)
 		if err != nil {
 			return apperrors.Internal(err)
@@ -103,7 +109,7 @@ func (s *Service) RecordPartialFulfillment(ctx context.Context, orderID uuid.UUI
 		}
 
 		if ord.Status != order.StatusPacked && ord.Status != order.StatusPartiallyFulfilled {
-			return apperrors.BadRequest("order must be packed or partially fulfilled to record partials")
+			return apperrors.BadRequest(apperrors.CodeValidationFailed, "order must be packed or partially fulfilled to record partials")
 		}
 
 		var partials []PartialFulfillment
