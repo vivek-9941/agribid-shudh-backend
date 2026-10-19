@@ -69,3 +69,17 @@ type RecordPaymentRequest struct {
 	ReferenceNumber string `json:"reference_number,omitempty"`
 	InvoiceID       string `json:"invoice_id,omitempty" validate:"omitempty,uuid"`
 }
+
+// CreateCreditAccountRequest is the payload for POST /credit-accounts.
+type CreateCreditAccountRequest struct {
+	BuyerID      string `json:"buyer_id" validate:"required,uuid"`
+	SellerID     string `json:"seller_id" validate:"required,uuid"`
+	CreditLimit  string `json:"credit_limit" validate:"required"`
+	PaymentTerms int    `json:"payment_terms" validate:"required,min=1"` // days
+}
+
+// UpdateCreditLimitRequest is the payload for PUT /credit-accounts/:id/limit.
+type UpdateCreditLimitRequest struct {
+	CreditLimit string `json:"credit_limit" validate:"required"`
+}
+
