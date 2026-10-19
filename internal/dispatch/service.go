@@ -8,6 +8,8 @@ import (
 	"github.com/agribid/agribid-shudh-backend/internal/db"
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type FulfillmentService interface {
@@ -17,12 +19,14 @@ type FulfillmentService interface {
 type Service struct {
 	repo           Repository
 	fulfillmentSvc FulfillmentService
+	pool           *pgxpool.Pool
 }
 
-func NewService(repo Repository, fulfillmentSvc FulfillmentService) *Service {
+func NewService(repo Repository, fulfillmentSvc FulfillmentService, pool *pgxpool.Pool) *Service {
 	return &Service{
 		repo:           repo,
 		fulfillmentSvc: fulfillmentSvc,
+		pool:           pool,
 	}
 }
 
@@ -40,8 +44,8 @@ func (s *Service) AssignDeliveryPartner(ctx context.Context, req *AssignPartnerR
 		DriverPhone:       &req.DriverPhone,
 	}
 
-	err := db.WithTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Create(txCtx, shipment); err != nil {
+	err := db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := s.repo.Create(ctx, shipment); err != nil {
 			return err
 		}
 
@@ -50,7 +54,7 @@ func (s *Service) AssignDeliveryPartner(ctx context.Context, req *AssignPartnerR
 			Status:     StatusAssigned,
 			Notes:      func(s string) *string { return &s }("Assigned to delivery partner"),
 		}
-		if err := s.repo.AddEvent(txCtx, evt); err != nil {
+		if err := s.repo.AddEvent(ctx, evt); err != nil {
 			return err
 		}
 		return nil
@@ -64,8 +68,8 @@ func (s *Service) AssignDeliveryPartner(ctx context.Context, req *AssignPartnerR
 }
 
 func (s *Service) UpdateShipmentStatus(ctx context.Context, req *UpdateStatusRequest, shipmentID, userID uuid.UUID) error {
-	return db.WithTx(ctx, func(txCtx context.Context) error {
-		shipment, err := s.repo.GetByID(txCtx, shipmentID)
+	return db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		shipment, err := s.repo.GetByID(ctx, shipmentID)
 		if err != nil {
 			return apperrors.Internal(err)
 		}
@@ -75,10 +79,10 @@ func (s *Service) UpdateShipmentStatus(ctx context.Context, req *UpdateStatusReq
 
 		newStatus := ShipmentStatus(req.Status)
 		if !CanTransition(shipment.Status, newStatus) {
-			return apperrors.BadRequest(fmt.Sprintf("invalid transition from %s to %s", shipment.Status, newStatus))
+			return apperrors.BadRequest(apperrors.CodeValidationFailed, fmt.Sprintf("invalid transition from %s to %s", shipment.Status, newStatus))
 		}
 
-		if err := s.repo.UpdateStatus(txCtx, shipmentID, newStatus); err != nil {
+		if err := s.repo.UpdateStatus(ctx, shipmentID, newStatus); err != nil {
 			return apperrors.Internal(err)
 		}
 
@@ -88,12 +92,12 @@ func (s *Service) UpdateShipmentStatus(ctx context.Context, req *UpdateStatusReq
 			Location:   req.Location,
 			Notes:      req.Notes,
 		}
-		if err := s.repo.AddEvent(txCtx, evt); err != nil {
+		if err := s.repo.AddEvent(ctx, evt); err != nil {
 			return apperrors.Internal(err)
 		}
 
 		if newStatus == StatusDelivered {
-			if err := s.fulfillmentSvc.UpdateOrderStatus(txCtx, shipment.OrderID, userID, "delivered", "Shipment Delivered"); err != nil {
+			if err := s.fulfillmentSvc.UpdateOrderStatus(ctx, shipment.OrderID, userID, "delivered", "Shipment Delivered"); err != nil {
 				return fmt.Errorf("failed to update order status: %w", err)
 			}
 		}

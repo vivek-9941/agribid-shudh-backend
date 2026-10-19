@@ -13,6 +13,7 @@ import (
 	"github.com/agribid/agribid-shudh-backend/internal/config"
 	"github.com/agribid/agribid-shudh-backend/internal/db"
 	"github.com/agribid/agribid-shudh-backend/internal/logger"
+	_ "github.com/joho/godotenv/autoload" // Auto-load .env file
 	"go.uber.org/zap"
 )
 
