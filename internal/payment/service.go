@@ -81,7 +81,15 @@ func (s *Service) RecordPayment(ctx context.Context, req *RecordPaymentRequest, 
 			return err
 		}
 
-		// Insert ledger entry for buyer
+		// Compute running balance: previous_balance - payment_amount (debit reduces balance owed)
+		prevBalance, err := s.repo.GetLastBalance(ctx, buyerID, sellerID)
+		if err != nil {
+			return fmt.Errorf("get last balance: %w", err)
+		}
+		prevRat, _ := new(big.Rat).SetString(prevBalance)
+		newBalance := new(big.Rat).Sub(prevRat, amtRat)
+
+		// Insert ledger entry for buyer with computed running balance
 		entry := &LedgerEntry{
 			PartnerID:      buyerID,
 			CounterpartyID: sellerID,
@@ -89,7 +97,7 @@ func (s *Service) RecordPayment(ctx context.Context, req *RecordPaymentRequest, 
 			ReferenceID:    &pay.ID,
 			Debit:          req.Amount,
 			Credit:         "0.00",
-			Balance:        "0.00", // Needs actual balance calculation
+			Balance:        formatDecimal(newBalance),
 			EntryDate:      time.Now(),
 			Description:    fmt.Sprintf("Payment via %s", req.Method),
 		}
@@ -131,7 +139,61 @@ func (s *Service) GetAgingReport(ctx context.Context, buyerID uuid.UUID) ([]Agin
 	return s.repo.GetAgingReport(ctx, buyerID)
 }
 
+// CreateCreditAccount creates a new credit account between buyer and seller.
+func (s *Service) CreateCreditAccount(ctx context.Context, req *CreateCreditAccountRequest) (*CreditAccount, error) {
+	buyerID, _ := uuid.Parse(req.BuyerID)
+	sellerID, _ := uuid.Parse(req.SellerID)
+
+	// Check if account already exists
+	existing, err := s.repo.GetCreditAccount(ctx, buyerID, sellerID)
+	if err != nil {
+		return nil, apperrors.Internal(err)
+	}
+	if existing != nil {
+		return nil, apperrors.Conflict(apperrors.CodeConflict, "credit account already exists between these partners")
+	}
+
+	account := &CreditAccount{
+		BuyerID:        buyerID,
+		SellerID:       sellerID,
+		CreditLimit:    req.CreditLimit,
+		CreditUtilized: "0.00",
+		PaymentTerms:   req.PaymentTerms,
+		OverdueAmount:  "0.00",
+	}
+
+	if err := s.repo.CreateCreditAccount(ctx, account); err != nil {
+		return nil, apperrors.Internal(err)
+	}
+
+	account.CreditAvailable = req.CreditLimit
+	return account, nil
+}
+
+// UpdateCreditLimit updates the credit limit for an existing account.
+func (s *Service) UpdateCreditLimit(ctx context.Context, accountID uuid.UUID, newLimit string) error {
+	return s.repo.UpdateCreditLimit(ctx, accountID, newLimit)
+}
+
+// GetPaymentByID retrieves a payment by ID.
+func (s *Service) GetPaymentByID(ctx context.Context, id uuid.UUID) (*Payment, error) {
+	pay, err := s.repo.GetPaymentByID(ctx, id)
+	if err != nil {
+		return nil, apperrors.Internal(err)
+	}
+	if pay == nil {
+		return nil, apperrors.NotFound("payment", id.String())
+	}
+	return pay, nil
+}
+
+// ListPayments lists payments for a partner.
+func (s *Service) ListPayments(ctx context.Context, partnerID uuid.UUID, page, pageSize int) ([]*Payment, int64, error) {
+	return s.repo.ListPayments(ctx, partnerID, page, pageSize)
+}
+
 func formatDecimal(r *big.Rat) string {
 	f, _ := r.Float64()
 	return fmt.Sprintf("%.2f", f)
 }
+
