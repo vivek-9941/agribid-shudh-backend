@@ -3,13 +3,15 @@ package app
 import (
 	"context"
 
-	"github.com/agribid/agribid-shudh-backend/internal/audit"
+	"github.com/agribid/agribid-shudh-backend/internal/admin"
+	// "github.com/agribid/agribid-shudh-backend/internal/audit"  // Not needed unless adding audit endpoints
 	"github.com/agribid/agribid-shudh-backend/internal/auth"
 	"github.com/agribid/agribid-shudh-backend/internal/catalog"
 	"github.com/agribid/agribid-shudh-backend/internal/dashboard"
 	"github.com/agribid/agribid-shudh-backend/internal/dispatch"
 	"github.com/agribid/agribid-shudh-backend/internal/fulfillment"
 	"github.com/agribid/agribid-shudh-backend/internal/integration"
+	"github.com/agribid/agribid-shudh-backend/internal/inventory"
 	"github.com/agribid/agribid-shudh-backend/internal/invoice"
 	"github.com/agribid/agribid-shudh-backend/internal/notification"
 	"github.com/agribid/agribid-shudh-backend/internal/order"
@@ -50,11 +52,12 @@ func (a *App) WireModules(val *validator.Validate, logger *zap.Logger) {
 	fulfillmentRepo := fulfillment.NewRepository(a.Pool)
 	invoiceRepo := invoice.NewRepository(a.Pool)
 	dispatchRepo := dispatch.NewRepository(a.Pool)
+	inventoryRepo := inventory.NewRepository(a.Pool)
 	paymentRepo := payment.NewRepository(a.Pool)
 	returnsRepo := returns.NewRepository(a.Pool)
 	notifRepo := notification.NewRepository(a.Pool)
 	dashRepo := dashboard.NewRepository(a.Pool)
-	auditRepo := audit.NewRepository(a.Pool)
+	// auditRepo := audit.NewRepository(a.Pool) // Not needed unless we add audit endpoints
 
 	// Gateways
 	smsProv := integration.NewMockSMSProvider(logger)
@@ -62,36 +65,50 @@ func (a *App) WireModules(val *validator.Validate, logger *zap.Logger) {
 	pdfGen := integration.NewMockPDFGenerator()
 
 	// Services
-	authSvc := auth.NewService(authRepo, nil, smsProv) // Config injected for tokens etc
-	_ = authSvc
+	// JWT Service
+	jwtSvc, err := auth.NewJWTService(
+		a.Config.JWTPrivateKeyPath,
+		a.Config.JWTPublicKeyPath,
+		a.Config.JWTAccessTTLHours,
+		a.Config.JWTRefreshTTLDays,
+	)
+	if err != nil {
+		logger.Fatal("failed to initialize JWT service", zap.Error(err))
+	}
+
+	authSvc := auth.NewService(authRepo, jwtSvc, smsProv)
 	partnerSvc := partner.NewService(partnerRepo)
 	catalogSvc := catalog.NewService(catalogRepo)
 	
+	// Inventory service and adapters
+	inventorySvc := inventory.NewService(inventoryRepo, a.Pool)
+	orderInvAdapter := inventory.NewOrderInventoryAdapter(inventorySvc, a.Pool)
+	fulfillmentInvAdapter := inventory.NewFulfillmentInventoryAdapter(inventorySvc, a.Pool)
+	returnsInvAdapter := inventory.NewReturnsInventoryAdapter(inventorySvc, a.Pool)
+	
 	// Pricing needs catalog, partner, and invoice(hsn)
-	invHSNSvc := invoice.NewHSNStubService() // We'd need an implementation
+	invHSNSvc := invoice.NewHSNStubService()
 	hsnSvc := &hsnAdapter{svc: invHSNSvc}
 	pricingSvc := pricing.NewService(pricingRepo, catalogSvc, partnerSvc, hsnSvc)
 	
 	paySvc := payment.NewService(paymentRepo, a.Pool)
 	invcSvc := invoice.NewService(invoiceRepo, nil, partnerSvc, pdfGen, a.Pool)
 	
-	// Order needs inventory, payment, pricing, catalog
-	orderSvc := order.NewService(orderRepo, nil, paySvc, pricingSvc, catalogSvc, a.Pool)
+	// Order needs inventory adapter, payment, pricing, catalog
+	orderSvc := order.NewService(orderRepo, orderInvAdapter, paySvc, pricingSvc, catalogSvc, a.Pool)
 	
 	// Set circular dependencies after init
 	invcSvc.SetOrderService(orderSvc)
 	
-	fulfillmentSvc := fulfillment.NewService(fulfillmentRepo, orderRepo, nil, a.Pool)
+	fulfillmentSvc := fulfillment.NewService(fulfillmentRepo, orderRepo, fulfillmentInvAdapter, a.Pool)
 	
 	dispatchSvc := dispatch.NewService(dispatchRepo, fulfillmentSvc, a.Pool)
-	returnsSvc := returns.NewService(returnsRepo, orderSvc, nil, invcSvc, paySvc, a.Pool)
+	returnsSvc := returns.NewService(returnsRepo, orderSvc, returnsInvAdapter, invcSvc, paySvc, a.Pool)
 	notifSvc := notification.NewService(notifRepo, emailProv, smsProv, logger)
 	dashSvc := dashboard.NewService(dashRepo)
+	adminSvc := admin.NewService()
 
-	// Middleware
-	a.Router.Use(audit.Middleware(auditRepo))
-
-	// Handlers
+	// Handlers (create all handlers first, before registering routes)
 	// Auth
 	authHnd := auth.NewHandler(authSvc, val)
 	authHnd.RegisterRoutes(a.Router)
@@ -107,6 +124,10 @@ func (a *App) WireModules(val *validator.Validate, logger *zap.Logger) {
 	// Pricing
 	pricingHnd := pricing.NewHandler(pricingSvc, val)
 	pricingHnd.RegisterRoutes(a.Router)
+
+	// Inventory
+	inventoryHnd := inventory.NewHandler(inventorySvc)
+	inventoryHnd.RegisterRoutes(a.Router)
 
 	// Order
 	orderHnd := order.NewHandler(orderSvc, val)
@@ -139,4 +160,8 @@ func (a *App) WireModules(val *validator.Validate, logger *zap.Logger) {
 	// Dashboard
 	dashHnd := dashboard.NewHandler(dashSvc)
 	dashHnd.RegisterRoutes(a.Router)
+
+	// Admin
+	adminHnd := admin.NewHandler(adminSvc)
+	adminHnd.RegisterRoutes(a.Router)
 }
