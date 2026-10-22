@@ -1,1 +1,2 @@
--- Placeholder: reverse of 000001_init.up.sql
+-- Drop extension
+DROP EXTENSION IF EXISTS "pgcrypto";

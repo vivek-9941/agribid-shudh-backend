@@ -20,12 +20,12 @@ func NewHandler(svc *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
-	r.Route("/dashboard", func(r chi.Router) {
+	r.Route("/api/v1/dashboard", func(r chi.Router) {
 		r.Get("/", h.getMetrics)
 	})
 	
-	// Stub for reports
-	r.Route("/reports", func(r chi.Router) {
+	// Reports
+	r.Route("/api/v1/reports", func(r chi.Router) {
 		r.Get("/{type}", h.getReport)
 	})
 }

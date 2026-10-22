@@ -29,6 +29,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) *App {
 	r := chi.NewRouter()
 
 	// Global middleware chain — design.md §6.2 order.
+	// Note: Module-specific middleware (audit) will be added in WireModules
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recovery)

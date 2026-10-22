@@ -13,6 +13,7 @@ import (
 	"github.com/agribid/agribid-shudh-backend/internal/config"
 	"github.com/agribid/agribid-shudh-backend/internal/db"
 	"github.com/agribid/agribid-shudh-backend/internal/logger"
+	"github.com/go-playground/validator/v10"
 	_ "github.com/joho/godotenv/autoload" // Auto-load .env file
 	"go.uber.org/zap"
 )
@@ -63,8 +64,11 @@ func main() {
 
 	// 5. Wire application.
 	application := app.New(cfg, pool)
+	
+	// 6. Wire all modules and routes.
+	application.WireModules(validator.New(), logger.Get())
 
-	// 6. Start HTTP server in background.
+	// 7. Start HTTP server in background.
 	go func() {
 		logger.Get().Info("HTTP server listening", zap.Int("port", cfg.ServerPort))
 		if err := application.Start(); err != nil && err != http.ErrServerClosed {
