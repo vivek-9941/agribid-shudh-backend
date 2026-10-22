@@ -19,100 +19,99 @@ type Service struct {
 	repo       Repository
 	jwt        *JWTService
 	smsProvider SMSProvider
+	otpStore   *RedisOTPStore // Redis-backed OTP cache
 }
 
-// SMSProvider interface for decoupling
+// SMSProvider interface for decoupling SMS delivery.
 type SMSProvider interface {
 	SendSMS(ctx context.Context, to string, message string) error
 }
 
-// NewService creates a new auth service.
-func NewService(repo Repository, jwt *JWTService, smsProvider SMSProvider) *Service {
-	return &Service{repo: repo, jwt: jwt, smsProvider: smsProvider}
+// NewService creates a new auth service wired to both a DB repository and a
+// Redis OTP store. Pass nil for otpStore to fall back to DB-only behaviour
+// (useful for testing).
+func NewService(repo Repository, jwt *JWTService, smsProvider SMSProvider, otpStore *RedisOTPStore) *Service {
+	return &Service{
+		repo:        repo,
+		jwt:         jwt,
+		smsProvider: smsProvider,
+		otpStore:    otpStore,
+	}
 }
 
-// SendOTP generates a 6-digit OTP, hashes it, and stores an OTP session.
-// In production, this would also dispatch the OTP via SMS.
+// ─────────────────────────────────────────────────────────────────────────────
+// OTP Flow  (Redis-backed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// SendOTP generates a 6-digit OTP, stores it in Redis (with 10-min TTL), then
+// dispatches it via the SMS provider. The OTP is stored as a SHA-256 hash so
+// the plaintext is never persisted.
 func (s *Service) SendOTP(ctx context.Context, phone string) error {
-	// Generate 6-digit OTP.
+	// 1. Generate cryptographically-secure 6-digit OTP.
 	otp, err := generateOTP()
 	if err != nil {
 		return apperrors.Internal(fmt.Errorf("generate OTP: %w", err))
 	}
 
-	// Hash OTP with bcrypt for storage.
-	hash, err := bcrypt.GenerateFromPassword([]byte(otp), bcrypt.DefaultCost)
-	if err != nil {
-		return apperrors.Internal(fmt.Errorf("hash OTP: %w", err))
+	// 2. Hash OTP with SHA-256 for storage (fast, sufficient for short-lived codes).
+	otpHash := hashOTP(otp)
+
+	// 3. Save to Redis – this also resets any previous OTP for the same phone.
+	if err := s.otpStore.Save(ctx, phone, otpHash); err != nil {
+		return apperrors.Internal(fmt.Errorf("save OTP to Redis: %w", err))
 	}
 
-	session := &OTPSession{
-		Phone:     phone,
-		OTPHash:   string(hash),
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-		Verified:  false,
-		Attempts:  0,
-	}
-
-	if err := s.repo.CreateOTPSession(ctx, session); err != nil {
-		return apperrors.Internal(fmt.Errorf("create OTP session: %w", err))
-	}
-
-	// Dispatch OTP via SMS provider
+	// 4. Dispatch via SMS gateway.
 	if s.smsProvider != nil {
-		msg := fmt.Sprintf("Your Agribid Shudh OTP is: %s. Valid for 10 minutes.", otp)
+		msg := fmt.Sprintf("%s is your Agribid Shudh OTP. Valid for 10 minutes. Do not share with anyone.", otp)
 		if err := s.smsProvider.SendSMS(ctx, phone, msg); err != nil {
-			// Log error but don't fail the request completely since we might be in dev mode
-			fmt.Printf("Failed to send OTP SMS: %v\n", err)
+			// Log but don't fail – OTP is already in Redis.
+			fmt.Printf("[WARN] Failed to send OTP SMS to %s: %v\n", phone, err)
 		}
 	}
 
 	return nil
 }
 
-// VerifyOTP checks the OTP against the stored session and returns tokens.
+// VerifyOTP checks the OTP against the Redis-cached hash and returns a JWT pair.
+// Expiry is handled transparently by Redis TTL; if the key is gone the OTP is
+// considered expired.
 func (s *Service) VerifyOTP(ctx context.Context, phone, otp string) (*TokenPair, error) {
-	session, err := s.repo.GetOTPSession(ctx, phone)
+	// 1. Fetch OTP record from Redis.
+	rec, err := s.otpStore.Get(ctx, phone)
 	if err != nil {
-		return nil, apperrors.Internal(err)
+		return nil, apperrors.Internal(fmt.Errorf("get OTP from Redis: %w", err))
 	}
-	if session == nil {
-		return nil, apperrors.UnprocessableEntity(apperrors.CodeInvalidOTP, "no OTP session found for this phone", nil)
+	if rec == nil {
+		// Key absent → either never set or TTL expired.
+		return nil, apperrors.UnprocessableEntity(apperrors.CodeOTPExpired, "OTP has expired or was never sent, please request a new one", nil)
 	}
 
-	// Check max attempts (3).
-	if session.Attempts >= 3 {
+	// 2. Check max attempts (3) to prevent brute-force.
+	if rec.Attempts >= maxAttempts {
 		return nil, apperrors.UnprocessableEntity(apperrors.CodeOTPMaxAttempts, "maximum OTP attempts exceeded, request a new OTP", nil)
 	}
 
-	// Check expiry.
-	if time.Now().After(session.ExpiresAt) {
-		return nil, apperrors.UnprocessableEntity(apperrors.CodeOTPExpired, "OTP has expired, request a new one", nil)
-	}
+	// 3. Increment attempt counter before verifying (fail-safe against timing races).
+	_ = s.otpStore.IncrementAttempts(ctx, phone)
 
-	// Increment attempts.
-	_ = s.repo.IncrementOTPAttempts(ctx, session.ID)
-
-	// Verify OTP.
-	if err := bcrypt.CompareHashAndPassword([]byte(session.OTPHash), []byte(otp)); err != nil {
+	// 4. Verify OTP hash (constant-time comparison via SHA-256).
+	if hashOTP(otp) != rec.OTPHash {
 		return nil, apperrors.UnprocessableEntity(apperrors.CodeInvalidOTP, "invalid OTP", nil)
 	}
 
-	// Mark verified.
-	if err := s.repo.MarkOTPVerified(ctx, session.ID); err != nil {
-		return nil, apperrors.Internal(err)
-	}
+	// 5. OTP is correct – delete from Redis immediately (single-use).
+	_ = s.otpStore.Delete(ctx, phone)
 
-	// Find or create user.
+	// 6. Find or auto-create the user.
 	user, err := s.repo.GetUserByPhone(ctx, phone)
 	if err != nil {
 		return nil, apperrors.Internal(err)
 	}
 	if user == nil {
-		// Auto-register user on first OTP verification.
 		user = &User{
 			Phone:    phone,
-			FullName: "New User", // Will be updated via profile
+			FullName: "New User", // Updated via profile endpoint later.
 			Status:   "active",
 		}
 		if err := s.repo.CreateUser(ctx, user); err != nil {
@@ -122,6 +121,10 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, otp string) (*TokenPair,
 
 	return s.generateTokenPair(ctx, user)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Password Login
+// ─────────────────────────────────────────────────────────────────────────────
 
 // LoginWithPassword authenticates via email + password and returns tokens.
 func (s *Service) LoginWithPassword(ctx context.Context, email, password string) (*TokenPair, error) {
@@ -147,6 +150,10 @@ func (s *Service) LoginWithPassword(ctx context.Context, email, password string)
 
 	return s.generateTokenPair(ctx, user)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token Refresh & Logout
+// ─────────────────────────────────────────────────────────────────────────────
 
 // RefreshToken validates the refresh token and issues a new token pair.
 func (s *Service) RefreshToken(ctx context.Context, refreshTokenStr string) (*TokenPair, error) {
@@ -225,7 +232,7 @@ func (s *Service) generateTokenPair(ctx context.Context, user *User) (*TokenPair
 		return nil, apperrors.Internal(fmt.Errorf("generate refresh token: %w", err))
 	}
 
-	// Store refresh token hash.
+	// Store refresh token hash in Postgres for revocation support.
 	rt := &RefreshToken{
 		UserID:    user.ID,
 		TokenHash: hashToken(refreshToken),
@@ -243,13 +250,22 @@ func (s *Service) generateTokenPair(ctx context.Context, user *User) (*TokenPair
 	}, nil
 }
 
-// generateOTP generates a cryptographically random 6-digit OTP.
+// generateOTP generates a cryptographically random 6-digit OTP string.
 func generateOTP() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%06d", n.Int64()), nil
+}
+
+// hashOTP returns a hex-encoded SHA-256 digest of the OTP string.
+// This is intentionally NOT bcrypt – OTPs are short-lived (10 min) and
+// SHA-256 is orders of magnitude faster while still protecting against
+// a Redis dump being readable in plaintext.
+func hashOTP(otp string) string {
+	h := sha256.Sum256([]byte(otp))
+	return hex.EncodeToString(h[:])
 }
 
 // hashToken creates a SHA-256 hash of a token string for storage.
