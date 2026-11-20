@@ -38,3 +38,29 @@ migrate
 
 # Docker overrides
 docker-compose.override.yml
+
+# Local dev / testing scripts
+*.bat
+*.sh
+server-live.log
+*.log~
+*-new.exe~
+
+# Local documentation & reports (not part of codebase)
+API-TESTING.md
+MANUAL-TESTING-GUIDE.md
+OTP-DEBUG-GUIDE.md
+OTP-FIX-SUMMARY.md
+QUICK-START-TESTING.md
+README-STARTUP.md
+TEST-REPORT.md
+TESTING-GUIDE.md
+install-redis-windows.md
+test-otp-flow.bat
+run-tests.bat
+start-cloud-proxy.bat
+start-postgres-proxy.bat
+server-live.log
+
+# Postman collections (keep in repo for team use — comment out to exclude)
+# postman/

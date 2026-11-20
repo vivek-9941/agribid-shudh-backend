@@ -41,6 +41,18 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	})
 }
 
+// Create godoc
+// @Summary      Create a partner
+// @Description  Register a new partner (manufacturer, distributor, retailer, etc.)
+// @Tags         Partners
+// @Accept       json
+// @Produce      json
+// @Param        body  body  CreatePartnerRequest  true  "Partner creation payload"
+// @Success      201  {object}  response.successResponse{data=Partner}
+// @Failure      400  {object}  response.errorResponse
+// @Failure      500  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners [post]
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var req CreatePartnerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -60,6 +72,17 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, p)
 }
 
+// GetByID godoc
+// @Summary      Get partner by ID
+// @Description  Retrieve a single partner by UUID
+// @Tags         Partners
+// @Produce      json
+// @Param        id  path  string  true  "Partner UUID"
+// @Success      200  {object}  response.successResponse{data=Partner}
+// @Failure      400  {object}  response.errorResponse
+// @Failure      404  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners/{id} [get]
 func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -75,6 +98,18 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, p)
 }
 
+// List godoc
+// @Summary      List partners
+// @Description  List partners with optional type filter and pagination
+// @Tags         Partners
+// @Produce      json
+// @Param        type       query  string  false  "Filter by partner type"
+// @Param        page       query  int     false  "Page number (default 1)"
+// @Param        page_size  query  int     false  "Items per page (default 20, max 100)"
+// @Success      200  {object}  response.paginatedResponse{data=[]Partner}
+// @Failure      500  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners [get]
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	partnerType := r.URL.Query().Get("type")
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -98,6 +133,19 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Update godoc
+// @Summary      Update a partner
+// @Description  Update partner details by UUID
+// @Tags         Partners
+// @Accept       json
+// @Produce      json
+// @Param        id    path  string                true  "Partner UUID"
+// @Param        body  body  UpdatePartnerRequest  true  "Update payload"
+// @Success      200  {object}  response.successResponse{data=Partner}
+// @Failure      400  {object}  response.errorResponse
+// @Failure      404  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners/{id} [put]
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -119,6 +167,18 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, p)
 }
 
+// SubmitKYC godoc
+// @Summary      Submit KYC document
+// @Description  Upload a KYC document for a partner
+// @Tags         Partners
+// @Accept       json
+// @Produce      json
+// @Param        id    path  string           true  "Partner UUID"
+// @Param        body  body  SubmitKYCRequest true  "KYC document payload"
+// @Success      201  {object}  response.successResponse{data=KYCDocument}
+// @Failure      400  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners/{id}/kyc [post]
 func (h *Handler) SubmitKYC(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -144,6 +204,16 @@ func (h *Handler) SubmitKYC(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, doc)
 }
 
+// GetKYC godoc
+// @Summary      Get KYC documents
+// @Description  Retrieve all KYC documents for a partner
+// @Tags         Partners
+// @Produce      json
+// @Param        id  path  string  true  "Partner UUID"
+// @Success      200  {object}  response.successResponse{data=[]KYCDocument}
+// @Failure      400  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners/{id}/kyc [get]
 func (h *Handler) GetKYC(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -159,6 +229,19 @@ func (h *Handler) GetKYC(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, docs)
 }
 
+// ReviewKYC godoc
+// @Summary      Review KYC
+// @Description  Approve or reject a partner's KYC submission
+// @Tags         Partners
+// @Accept       json
+// @Produce      json
+// @Param        id    path  string           true  "Partner UUID"
+// @Param        body  body  ReviewKYCRequest true  "Review payload"
+// @Success      200  {object}  response.successResponse{data=map[string]string}
+// @Failure      400  {object}  response.errorResponse
+// @Failure      401  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners/{id}/kyc [patch]
 func (h *Handler) ReviewKYC(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -189,6 +272,16 @@ func (h *Handler) ReviewKYC(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]string{"message": "KYC review completed"})
 }
 
+// GetChildren godoc
+// @Summary      Get partner children
+// @Description  Get child partners in the hierarchy
+// @Tags         Partners
+// @Produce      json
+// @Param        id  path  string  true  "Partner UUID"
+// @Success      200  {object}  response.successResponse{data=[]Partner}
+// @Failure      400  {object}  response.errorResponse
+// @Security     BearerAuth
+// @Router       /api/v1/partners/{id}/children [get]
 func (h *Handler) GetChildren(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

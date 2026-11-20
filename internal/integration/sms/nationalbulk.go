@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,35 +55,52 @@ func (p *Provider) SendSMS(ctx context.Context, to, message string) error {
 		return fmt.Errorf("sms: invalid mobile number %q – expected 10 digits after stripping country code", to)
 	}
 
+	// Format phone as 91XXXXXXXXXX (12 digits, no + prefix) — as required by NationalBulkSMS.
+	// This matches the working Python implementation: f"91{mobile[-10:]}"
+	toNumber := "91" + mobile
+
 	params := url.Values{}
 	params.Set("username", p.cfg.Username)
 	params.Set("password", p.cfg.Password)
-	params.Set("mobile", mobile)
-	params.Set("message", message)
-	params.Set("senderid", p.cfg.SenderID)
-	params.Set("mtype", "N")      // Normal / Transactional
-	params.Set("msgtype", "TEXT") // Plain text
+	params.Set("unicode", "false")
+	params.Set("from", p.cfg.SenderID)
+	params.Set("to", toNumber)
+	params.Set("text", message)
 	if p.cfg.DLTContentID != "" {
-		params.Set("DLT_TE_ID", p.cfg.DLTContentID)
+		params.Set("dltContentId", p.cfg.DLTContentID)
 	}
 	if p.cfg.DLTPEiD != "" {
-		params.Set("PEID", p.cfg.DLTPEiD)
+		params.Set("dltPeid", p.cfg.DLTPEiD)
 	}
 
 	reqURL := fmt.Sprintf("%s?%s", p.cfg.APIURL, params.Encode())
 
+	// Log the outgoing request (mask password for security)
+	maskedParams := url.Values{}
+	for k, v := range params {
+		if k == "password" {
+			maskedParams.Set(k, "***")
+		} else {
+			maskedParams[k] = v
+		}
+	}
+	log.Printf("[SMS] Sending request to NationalBulkSMS: %s?%s", p.cfg.APIURL, maskedParams.Encode())
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
+		log.Printf("[SMS] ❌ Failed to build HTTP request: %v", err)
 		return fmt.Errorf("sms: build request: %w", err)
 	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
+		log.Printf("[SMS] ❌ HTTP request failed: %v", err)
 		return fmt.Errorf("sms: send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[SMS] Gateway response: HTTP %d | Body: %s", resp.StatusCode, string(body))
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sms: gateway returned HTTP %d: %s", resp.StatusCode, body)

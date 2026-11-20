@@ -18,6 +18,24 @@ import (
 	"go.uber.org/zap"
 )
 
+// @title           Agribid Shudh API
+// @version         1.0
+// @description     Backend API for the Agribid Shudh B2B agri-commerce platform.
+// @description     Covers Auth, Partners, Catalog, Pricing, Orders, Inventory,
+// @description     Fulfillment, Dispatch, Payments, Returns, Invoices, Notifications,
+// @description     Dashboard, and Admin modules.
+
+// @contact.name   Agribid Shudh Dev Team
+// @contact.email  dev@agribid.com
+
+// @host      localhost:8080
+// @BasePath  /
+
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Enter your bearer token as: Bearer <token>
+
 func main() {
 	ctx := context.Background()
 

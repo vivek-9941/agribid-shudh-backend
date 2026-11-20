@@ -11,15 +11,17 @@ import (
 
 	apperrors "github.com/agribid/agribid-shudh-backend/internal/errors"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // Service provides authentication business logic.
 type Service struct {
-	repo       Repository
-	jwt        *JWTService
+	repo        Repository
+	jwt         *JWTService
 	smsProvider SMSProvider
-	otpStore   *RedisOTPStore // Redis-backed OTP cache
+	otpStore    *RedisOTPStore // Redis-backed OTP cache
+	logger      *zap.Logger
 }
 
 // SMSProvider interface for decoupling SMS delivery.
@@ -36,6 +38,7 @@ func NewService(repo Repository, jwt *JWTService, smsProvider SMSProvider, otpSt
 		jwt:         jwt,
 		smsProvider: smsProvider,
 		otpStore:    otpStore,
+		logger:      zap.L(), // uses the global logger wired at startup
 	}
 }
 
@@ -47,28 +50,46 @@ func NewService(repo Repository, jwt *JWTService, smsProvider SMSProvider, otpSt
 // dispatches it via the SMS provider. The OTP is stored as a SHA-256 hash so
 // the plaintext is never persisted.
 func (s *Service) SendOTP(ctx context.Context, phone string) error {
+	log := s.logger.With(zap.String("phone", phone))
+	log.Info("[OTP] SendOTP called")
+
 	// 1. Generate cryptographically-secure 6-digit OTP.
 	otp, err := generateOTP()
 	if err != nil {
+		log.Error("[OTP] Failed to generate OTP", zap.Error(err))
 		return apperrors.Internal(fmt.Errorf("generate OTP: %w", err))
 	}
+	log.Debug("[OTP] Generated OTP (debug only – remove in production)", zap.String("otp", otp))
 
 	// 2. Hash OTP with SHA-256 for storage (fast, sufficient for short-lived codes).
 	otpHash := hashOTP(otp)
 
 	// 3. Save to Redis – this also resets any previous OTP for the same phone.
+	log.Info("[OTP] Saving OTP to Redis", zap.String("key", "otp:"+phone))
 	if err := s.otpStore.Save(ctx, phone, otpHash); err != nil {
+		log.Error("[OTP] ❌ Failed to save OTP to Redis", zap.Error(err))
 		return apperrors.Internal(fmt.Errorf("save OTP to Redis: %w", err))
 	}
+	log.Info("[OTP] ✅ OTP saved to Redis successfully")
 
 	// 4. Dispatch via SMS gateway.
-	if s.smsProvider != nil {
-		msg := fmt.Sprintf("%s is your Agribid Shudh OTP. Valid for 10 minutes. Do not share with anyone.", otp)
-		if err := s.smsProvider.SendSMS(ctx, phone, msg); err != nil {
-			// Log but don't fail – OTP is already in Redis.
-			fmt.Printf("[WARN] Failed to send OTP SMS to %s: %v\n", phone, err)
-		}
+	if s.smsProvider == nil {
+		log.Warn("[OTP] SMS provider is nil – OTP NOT sent")
+		return nil
 	}
+
+	msg := fmt.Sprintf("Dear User, your verification code for Agribid Shudh is %s . This code is valid for 10 minutes. Please do not share this code with anyone. Team Agribid Shudh", otp)
+	log.Info("[OTP] Dispatching SMS via provider", zap.String("provider", fmt.Sprintf("%T", s.smsProvider)))
+	if err := s.smsProvider.SendSMS(ctx, phone, msg); err != nil {
+		// Log full error but don't fail the request – OTP is already in Redis.
+		log.Error("[OTP] ❌ SMS dispatch FAILED",
+			zap.String("phone", phone),
+			zap.String("provider", fmt.Sprintf("%T", s.smsProvider)),
+			zap.Error(err),
+		)
+		return nil // OTP is in Redis; client can still verify manually
+	}
+	log.Info("[OTP] ✅ SMS dispatched successfully", zap.String("phone", phone))
 
 	return nil
 }
@@ -77,18 +98,25 @@ func (s *Service) SendOTP(ctx context.Context, phone string) error {
 // Expiry is handled transparently by Redis TTL; if the key is gone the OTP is
 // considered expired.
 func (s *Service) VerifyOTP(ctx context.Context, phone, otp string) (*TokenPair, error) {
+	log := s.logger.With(zap.String("phone", phone))
+	log.Info("[OTP] VerifyOTP called")
+
 	// 1. Fetch OTP record from Redis.
+	log.Info("[OTP] Fetching OTP record from Redis", zap.String("key", "otp:"+phone))
 	rec, err := s.otpStore.Get(ctx, phone)
 	if err != nil {
+		log.Error("[OTP] ❌ Failed to fetch OTP from Redis", zap.Error(err))
 		return nil, apperrors.Internal(fmt.Errorf("get OTP from Redis: %w", err))
 	}
 	if rec == nil {
-		// Key absent → either never set or TTL expired.
+		log.Warn("[OTP] ❌ No OTP record found in Redis (expired or never sent)")
 		return nil, apperrors.UnprocessableEntity(apperrors.CodeOTPExpired, "OTP has expired or was never sent, please request a new one", nil)
 	}
+	log.Info("[OTP] OTP record found in Redis", zap.Int("attempts", rec.Attempts))
 
 	// 2. Check max attempts (3) to prevent brute-force.
 	if rec.Attempts >= maxAttempts {
+		log.Warn("[OTP] ❌ Max OTP attempts exceeded", zap.Int("attempts", rec.Attempts))
 		return nil, apperrors.UnprocessableEntity(apperrors.CodeOTPMaxAttempts, "maximum OTP attempts exceeded, request a new OTP", nil)
 	}
 
@@ -97,8 +125,10 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, otp string) (*TokenPair,
 
 	// 4. Verify OTP hash (constant-time comparison via SHA-256).
 	if hashOTP(otp) != rec.OTPHash {
+		log.Warn("[OTP] ❌ OTP hash mismatch – invalid OTP provided")
 		return nil, apperrors.UnprocessableEntity(apperrors.CodeInvalidOTP, "invalid OTP", nil)
 	}
+	log.Info("[OTP] ✅ OTP verified successfully")
 
 	// 5. OTP is correct – delete from Redis immediately (single-use).
 	_ = s.otpStore.Delete(ctx, phone)
@@ -109,14 +139,19 @@ func (s *Service) VerifyOTP(ctx context.Context, phone, otp string) (*TokenPair,
 		return nil, apperrors.Internal(err)
 	}
 	if user == nil {
+		log.Info("[OTP] User not found – auto-creating new user")
 		user = &User{
 			Phone:    phone,
 			FullName: "New User", // Updated via profile endpoint later.
 			Status:   "active",
 		}
 		if err := s.repo.CreateUser(ctx, user); err != nil {
+			log.Error("[OTP] ❌ Failed to create user", zap.Error(err))
 			return nil, apperrors.Internal(fmt.Errorf("create user: %w", err))
 		}
+		log.Info("[OTP] ✅ New user created", zap.String("user_id", user.ID.String()))
+	} else {
+		log.Info("[OTP] Existing user found", zap.String("user_id", user.ID.String()))
 	}
 
 	return s.generateTokenPair(ctx, user)
